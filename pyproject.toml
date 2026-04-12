@@ -1,0 +1,19 @@
+[project]
+name = "nasscom-hackathon"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.42.87",
+    "chromadb>=1.5.5",
+    "langchain>=1.2.15",
+    "langchain-aws>=1.4.3",
+    "langchain-core>=1.2.26",
+    "langgraph>=1.1.6",
+    "numpy>=2.4.4",
+    "pandas>=3.0.2",
+    "pydantic>=2.12.5",
+    "python-dotenv>=1.2.2",
+    "sentence-transformers>=5.3.0",
+]
