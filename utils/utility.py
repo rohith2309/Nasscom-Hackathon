@@ -9,6 +9,7 @@ class AgentState(MessagesState):
     category: str
     priority: str
     assignment_group: str
+    rag_context: str
 
 
 class FeedbackCheck(BaseModel):

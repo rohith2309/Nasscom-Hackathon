@@ -45,16 +45,20 @@ def RAG_check_node(state:AgentState):
         THRESHOLD = 0.7
         
         if confidence_score >= THRESHOLD:
+            metadata = results['metadatas'][0]
+            document_text = results['documents'][0]
+            
+            context_info= "\n".join([f"resolution:{m["resolution"]} \ndocuments:{d}" for m,d in zip(metadata, document_text)])
+            
+                
+            
             return {
                     "is_relevant": True,
-                    "messages":[("assistant",f"found a relevant document. results: {results}")]
+                    "rag_context":context_info
                 }
         else:
             print(f"--- RAG Debug: Confidence too low ({confidence_score:.2f}) ---")
-            return {
-                "is_relevant": False,
-                "messages":[("assistant","couldn't find a relevant document in the knowledge classify and the query, create and assign a new ticket with the help available tools (create_ticket tool)")]
-                }
+            return {"is_relevant": False, "rag_context": ""}
     
         
     except Exception as e:

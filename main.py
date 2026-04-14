@@ -46,11 +46,26 @@ ClassificationNode=get_classificationNode(Novalite_model)
 def ticketing_agent(state: AgentState):
     group = state.get("assignment_group", "IT_SUPPORT_L1")
     cat = state.get("category", "General")
+    context = state.get("rag_context", "")
+    
+    if context and state["is_relevant"]:
+        prompt_addition=(
+            f"\n\nKNOWLEDGE BASE CONTEXT:\n{context}\n"
+            "INSTRUCTION: Summarize the solution above for the user. "
+            "Explain it clearly and ask if it resolves their issue. DO NOT call any tools yet."
+        )
+    else:
+        prompt_addition = (
+            f"\n\nCATEGORY: {state.get('category')} | PRIORITY: {state.get('priority')}\n"
+            "INSTRUCTION: No relevant fix was found. Use the 'create_ticket' tool immediately "
+            "using the category and priority provided."
+        )    
+       
     
    
     
     llm_with_tools = Novalite_model.bind_tools([create_ticket, lookup_ticket])
-    full_messages=[SystemMessage(content=SUPPORT_SYSTEM_PROMPT)]+state["messages"]
+    full_messages=[SystemMessage(content=SUPPORT_SYSTEM_PROMPT+prompt_addition)]+state["messages"]
     response=llm_with_tools.invoke(full_messages)
     return {"messages": [response]}
 
@@ -71,7 +86,7 @@ workFlow.add_node("classification_node", ClassificationNode)
 workFlow.add_edge(START, "rag_check")
 workFlow.add_conditional_edges(
     "rag_check", rag_router,{
-        "feedback_check": "feedback_check",
+        "ticketing_agent": "ticketing_agent",
         "classification_node": "classification_node"
     }
 )
@@ -82,6 +97,8 @@ workFlow.add_conditional_edges(
         "classification_node": "classification_node"
     }
 )
+
+
 
 workFlow.add_edge("classification_node", "ticketing_agent")
 
