@@ -10,3 +10,7 @@ def feedback_router(state: AgentState) -> Literal["end", "classification_node"]:
     if state.get("is_satisfied"):
         return "end"             
     return "classification_node"  
+
+def base_router(state: AgentState)->Literal["rag_check", "ticketing_agent"]:
+    initial_message = state["messages"][0].content.lower() if state["messages"] else ""
+   
