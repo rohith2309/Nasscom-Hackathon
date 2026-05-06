@@ -3,34 +3,24 @@ from langgraph.prebuilt import ToolNode,tools_condition
 from Agents.RAGAgent import RAG_check_node
 from Agents.TicketingAgent import create_ticket, lookup_ticket
 from langchain_aws import ChatBedrockConverse
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, AIMessage
 import boto3
 import os
 from dotenv import load_dotenv
-from utils.utility import  get_feedbackNode,AgentState,get_classificationNode
+from utils.utility import  get_feedbackNode,AgentState,get_classificationNode,is_ai_speaking
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel,Field
+
+
+from Agents.SpecificAgent.AgentSupervisor import SupervisorAgentNode
+from Agents.SpecificAgent.AgentTicket import TicketAgentNode
+from Agents.SpecificAgent.AgentRAG import RagAgentNode
 
 from utils.Routers import rag_router, feedback_router
 
 load_dotenv()
 
 memory = MemorySaver()
-
-SUPPORT_SYSTEM_PROMPT =  """
-You are a proactive L1 IT Support Assistant. 
-When RAG fails (confidence is low), follow these steps:
-1. LOOK at the user's initial message and the classification results in the state.
-2. AUTOMATICALLY generate a professional 'Title' and 'Description' based on their complaint.
-3. Use the 'category' and 'priority' already provided in the state.
-4. CALL the 'create_ticket' tool immediately. DO NOT ask the user for these details if they have already described their problem.
-5. Only ask for missing information if the user's initial message was too vague (e.g., just saying 'help').
-6. IMPORTANT: If the conversation history shows that a tool has already returned a 'ticket_id', DO NOT ask more questions. Simply say: 'I have successfully created a ticket for you. Your ticket ID is [ID]. A technician will contact you soon.' and then END the conversation.
-
-If RAG succeeds (confidence is high), provide the relevant information to the user and ask if their issue is resolved. If they say 'yes', end the conversation. If they say 'no', proceed to create a ticket as described above.
-
-"""
-
 Novalite_model=ChatBedrockConverse(
     model="amazon.nova-lite-v1:0", 
     temperature=0, 
@@ -39,101 +29,115 @@ Novalite_model=ChatBedrockConverse(
     aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
        
     )
+
+from typing import Literal
+from pydantic import BaseModel, Field
+
+class Router(BaseModel):
+    """The Supervisor's routing decision."""
+    next_agent: Literal["RAG_Agent", "Ticketing_Agent", "FINISH"] = Field(
+        
+        description="""
+        - RAG_Agent: Use for ALL technical 'how-to', troubleshooting, or error resolution questions. 
+        - Ticketing_Agent: ONLY use for creating new tickets, checking ticket status, or when the user explicitly asks for a human.
+        - FINISH: Use only when the user's issue is fully resolved or if they are just saying hello and asking how you can help them.
+        """
+    )
+    instructions: str = Field(
+        description="Specific instructions or context to pass to the next worker."
+    )
+
+def supervisor_node(state: AgentState):
+    planner = Novalite_model.with_structured_output(Router)
+    rag_already_attempted = state.get("rag_tried", False)
+    rag_was_successful = state.get("is_relevant", False)
+
+    messages = state.get("messages", [])
+    if not messages:
+        return {"next_agent": "RAG_Agent"}
+        
+    last_message = messages[-1]
+
+    if is_ai_speaking(last_message):
+        # Ensure we don't stop the graph if the AI is mid-tool-call
+        has_tool_calls = hasattr(last_message, "tool_calls") and last_message.tool_calls
+        if not has_tool_calls:
+            return {"next_agent": "FINISH"}
+
+    # RAG failed → force Ticketing
+    if rag_already_attempted and not rag_was_successful:
+        return {"next_agent": "Ticketing_Agent"}
+
+    # RAG succeeded → go to Ticketing to present results
+    if rag_already_attempted and rag_was_successful:
+        return {"next_agent": "Ticketing_Agent"}
+
+    # Default: LLM decides (only reached on first turn, before RAG has run)
+    system_prompt = (
+        "You are the L1 Support Supervisor. Your job is to manage the flow between workers.You can respond to users greetings and ask how can I help you?\n"
+        "Workers:\n"
+        "- RAG_Agent: Use this for technical questions or if the user needs a solution.\n"
+        "- Ticketing_Agent: Use this if RAG failed, if the user is unhappy with the fix, "
+        "or if they want to create/look up a ticket.\n"
+        "- FINISH: Use this only if the user's issue is fully resolved.Also in the initial conversation where the user introduces themselves and asks for help.\n\n"
+        "RULES:\n"
+        "1. NEVER route to RAG_Agent if rag_tried is already True.\n"
+        "2. If a technical issue is reported and RAG hasn't been tried, use RAG_Agent.\n"
+        "3. For ticket creation/lookup requests, use Ticketing_Agent directly.\n"
+    )
+
+    messages = [SystemMessage(content=system_prompt)] + state["messages"]
+    decision = planner.invoke(messages)
+    print(f"--- [Supervisor Debug] RAG Tried: {rag_already_attempted}, RAG Success: {rag_was_successful} ---")
+    print(f"--- [Supervisor Decision]: {decision} ---")
+
+    return {"next_agent": decision.next_agent}
+
+
+
+
 FeedBackNode=get_feedbackNode(Novalite_model)
 ClassificationNode=get_classificationNode(Novalite_model)
 
 
-def ticketing_agent(state: AgentState):
-    group = state.get("assignment_group", "IT_SUPPORT_L1")
-    cat = state.get("category", "General")
-    context = state.get("rag_context", "")
-    
-    if context and state["is_relevant"]:
-        prompt_addition=(
-            f"\n\nKNOWLEDGE BASE CONTEXT:\n{context}\n"
-            "INSTRUCTION: Summarize the solution above for the user. "
-            "Explain it clearly and ask if it resolves their issue. DO NOT call any tools yet."
-        )
-    else:
-        prompt_addition = (
-            f"\n\nCATEGORY: {state.get('category')} | PRIORITY: {state.get('priority')}\n"
-            "INSTRUCTION: No relevant fix was found. Use the 'create_ticket' tool immediately "
-            "using the category and priority provided."
-        )    
-       
-    
-   
-    
-    llm_with_tools = Novalite_model.bind_tools([create_ticket, lookup_ticket])
-    full_messages=[SystemMessage(content=SUPPORT_SYSTEM_PROMPT+prompt_addition)]+state["messages"]
-    response=llm_with_tools.invoke(full_messages)
-    return {"messages": [response]}
-
-
-class FeedbackCheck(BaseModel):
-    is_satisfied: bool = Field(description="True if the user is happy, False if they still have an issue.")
-    
-    
-    
-
-workFlow=StateGraph(AgentState)
-workFlow.add_node("rag_check", RAG_check_node)
-workFlow.add_node("feedback_check", FeedBackNode)
-workFlow.add_node("ticketing_agent", ticketing_agent)
-workFlow.add_node("tools", ToolNode([create_ticket, lookup_ticket]))
-workFlow.add_node("classification_node", ClassificationNode)
-
-workFlow.add_edge(START, "rag_check")
-workFlow.add_conditional_edges(
-    "rag_check", rag_router,{
-        "ticketing_agent": "ticketing_agent",
-        "classification_node": "classification_node"
-    }
-)
-
-workFlow.add_conditional_edges(
-    "feedback_check", feedback_router,{
-        "end": END,
-        "classification_node": "classification_node"
-    }
-)
 
 
 
-workFlow.add_edge("classification_node", "ticketing_agent")
 
-workFlow.add_conditional_edges("ticketing_agent", tools_condition)
-workFlow.add_edge("tools", "ticketing_agent")
+# --- Graph Construction ---
+workFlow = StateGraph(AgentState)
+
+# 1. Add All Nodes
+workFlow.add_node("SupervisorAgent", SupervisorAgentNode)
+workFlow.add_node("RAGAgent", RagAgentNode)
+workFlow.add_node("TicketAgent", TicketAgentNode)
+
+
+# 2. Define the Entry Point
+workFlow.add_edge(START, "SupervisorAgent")
+
 
 app = workFlow.compile(checkpointer=memory)
 
+
+
 def main():
-    # A unique ID for the conversation session
-    config = {"configurable": {"thread_id": "test_session_1"}}
-    
-    print("--- Ticketing Support Bot (Type 'exit' to quit) ---")
+    config = {"configurable": {"thread_id": "session_v1"}}
+    print("--- 🤖 L1 IT Support Supervisor Active ---")
     
     while True:
-        user_input = input("User: ")
+        user_input = input("\nUser: ")
         if user_input.lower() in ["exit", "quit"]:
             break
 
-        # Stream the output so you can see the 'thought process' of the graph
         for event in app.stream({"messages": [("user", user_input)]}, config):
-            for value in event.values():
-                # Print the last message generated by any node
-                if "messages" in value:
-                    last_msg = value["messages"][-1]
-                    print("--- Debug: Current State Messages ---")
-                    print(value["messages"])
-                    print("--- Debug: Last Message ---")
-                    print("last message:", last_msg)
-                    print("--- End of Debug ---")
-                    
-                    
-                    # Check if it's a list (from RAG) or a BaseMessage (from Nova)
-                    msg_content = last_msg[1] if isinstance(last_msg, tuple) else last_msg.content
-                    print(f"L1 support Assistant: {msg_content}")
+            # event is a dict: {'node_name': { ... node output ... }}
+            for node_name, value in event.items():
+                
+                print(f"--- [Event] Node: {node_name} | Output: {value["messages"][-1]} ---")
+                
 
 if __name__ == "__main__":
     main()
+
+

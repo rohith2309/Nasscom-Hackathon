@@ -8,6 +8,7 @@ import os
 from utils.utility import  AgentState
 from chromadb.utils import embedding_functions
 import chromadb
+from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, MessagesState
 load_dotenv()
 
@@ -15,9 +16,13 @@ CHROMA_DB_KEY=os.getenv('CHROMA_DB')
 model = 'all-MiniLM-L6-v2'
 ef= embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model)
 
-def RAG_check_node(state:AgentState):
+@tool
+def RAG_check_node(query :str):
+    
+    '''A tool to check the RAG database for relevant information based on the user's query. It takes the user's query as input and returns the relevant information from the RAG database if the confidence score is above a certain threshold.'''
+    
     try:
-        query = state["messages"][-1].content
+        
         client = chromadb.CloudClient(
                 api_key=CHROMA_DB_KEY,
                 tenant='e5b49720-5aa8-4df7-bd60-0e8ea24aeda7',
