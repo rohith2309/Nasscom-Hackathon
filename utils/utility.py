@@ -4,7 +4,12 @@ from langgraph.graph import MessagesState
 from typing import Literal
 from langchain_core.messages import SystemMessage, AIMessage,BaseMessage
 from langgraph.prebuilt import create_react_agent
+from langchain_aws import ChatBedrockConverse
+import os
+from dotenv import load_dotenv
 
+# Load environment variables at module import time
+load_dotenv()
 
 class AgentState(MessagesState):
     is_satisfied: bool
@@ -122,3 +127,13 @@ def is_ai_speaking(message) -> bool:
         return role in ['ai', 'assistant']
         
     return False    
+
+
+Novalite_model=ChatBedrockConverse(
+    model="amazon.nova-lite-v1:0", 
+    temperature=0, 
+    region_name='us-east-1',
+    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+       
+)

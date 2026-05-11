@@ -7,15 +7,9 @@ from utils.Routers import RouteDecision
 from typing import Literal
 from langgraph.graph import END
 from langgraph.types import Command
-from utils.utility import AgentState
+from utils.utility import AgentState,Novalite_model
 
-Novalite_model=ChatBedrockConverse(
-    model="amazon.nova-lite-v1:0", 
-    temperature=0, 
-    region_name='us-east-1',
-    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-    )
+
 
 GROUPS_LIST = ["DB_ADMIN", "NETWORK_TEAM", "CLOUD_OPS", "SERVICE_DESK"]
 CATEGORIES_LIST = ['Infrastructure', 'Application', 'Security', 'Database', 'Network', 'Access Management']
@@ -53,18 +47,17 @@ def SupervisorAgentNode(state:AgentState)->Command[Literal["RAGAgent", "TicketAg
     response = Novalite_model.with_structured_output(RouteDecision).invoke(message)
     
     if response.next_agent == "FINISH":
-        return Command(goto=END, update={"messages": [HumanMessage(content="Session concluded.")]})
+        return Command(goto=END)
 
     return Command(
+        
         goto=response.next_agent,
         update={
-            "messages": [
-                HumanMessage(content=(
-                    f"INSTRUCTION for {response.next_agent}: {response.task_description}\n"
-                    f"ASSIGNMENT GROUP: {response.assignment_group}\n"
-                    f"REASON: {response.reason}"
-                ))
-            ],
-            "next_agent": response.next_agent,
+        "next_agent"      : response.next_agent,
+        "category"        : response.category,
+        "priority"        : response.priority,
+        "assignment_group": response.assignment_group,
+        # No messages update here — conversation history stays clean
         }
-    )
+)
+    

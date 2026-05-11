@@ -1,25 +1,20 @@
-from utils.utility import create_agent
-from langchain_aws import ChatBedrockConverse
-from Agents.AgentTools.CreateTool import create_ticket
-from Agents.AgentTools.LookupTool import lookup_ticket 
-from langchain_core.messages import HumanMessage
-import os
+from utils.utility import create_agent, AgentState, Novalite_model
+from langchain_core.messages import SystemMessage
 from typing import Literal
 from langgraph.types import Command
-from utils.utility import AgentState
+from Agents.AgentTools.CreateTool import create_ticket
+from Agents.AgentTools.LookupTool import lookup_ticket 
 
+TicketAgentPrompt = """
+You are a helpful assistant agent responsible for creating and looking up tickets.
+You have access to two tools:
+- create_ticket: creates a new ticket
+- lookup_ticket: looks up an existing ticket by ID
 
-Novalite_model=ChatBedrockConverse(
-    model="amazon.nova-lite-v1:0", 
-    temperature=0, 
-    region_name='us-east-1',
-    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-    )
-
-TicketAgentPrompt="""
-You are a helpful assistant agent responsible for creating and looking up tickets in the ticketing system. You have access to two tools, CreateTool and LookupTool. CreateTool is used to create a ticket in the ticketing system and LookupTool is used to lookup a ticket in the ticketing system. Always use CreateTool to create a ticket when required and use LookupTool to lookup a ticket when required.
-
+RULES:
+- Never ask the user for priority, category, or assignment group — use values from context
+- If a ticket ID is mentioned, use lookup_ticket
+- Otherwise use create_ticket
 
 NOTE: You Should not ask the user for priority or category; 
     use the values provided in the conversation context
@@ -34,12 +29,28 @@ NOTE: You Should not ask the user for priority or category;
     ]
 """
 
-AgentTicket=create_agent(TicketAgentPrompt,Novalite_model,[create_ticket,lookup_ticket])
+AgentTicket = create_agent(TicketAgentPrompt, Novalite_model, [create_ticket, lookup_ticket])
 
-def TicketAgentNode(state:AgentState)->Command[Literal["SupervisorAgent"]]:
-    query = state["messages"]
-    result = AgentTicket.invoke({"messages": query})
+def TicketAgentNode(state: AgentState) -> Command[Literal["SupervisorAgent"]]:
+    # Read classification from state — set by SupervisorAgent
+    category         = state.get("category", "Infrastructure")
+    priority         = state.get("priority", "Medium")
+    assignment_group = state.get("assignment_group", "SERVICE_DESK")
+
+    # Inject as SystemMessage — local only, never stored in state
+    context = SystemMessage(content=(
+        f"Ticket classification already decided — do not change or ask user:\n"
+        f"Category: {category} | Priority: {priority} | Group: {assignment_group}"
+    ))
+
+    result = AgentTicket.invoke({
+        "messages": [context] + state["messages"]   # prepend, don't append
+    })
+
+    # Only return NEW messages the agent added, not the full history
+    new_messages = result["messages"][len(state["messages"]):]
+
     return Command(
-        goto='SupervisorAgent',
-        update={"messages": result["messages"]}
-    )
+        goto="SupervisorAgent",
+        update={"messages": new_messages}
+    )    

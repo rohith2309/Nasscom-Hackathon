@@ -1,3 +1,10 @@
+from pprint import pprint
+import os
+from dotenv import load_dotenv
+
+# Load environment variables BEFORE any other imports
+load_dotenv()
+
 from langgraph.graph import StateGraph, START ,END
 from langgraph.prebuilt import ToolNode,tools_condition
 from Agents.RAGAgent import RAG_check_node
@@ -5,9 +12,7 @@ from Agents.TicketingAgent import create_ticket, lookup_ticket
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import SystemMessage, AIMessage
 import boto3
-import os
-from dotenv import load_dotenv
-from utils.utility import  get_feedbackNode,AgentState,get_classificationNode,is_ai_speaking
+from utils.utility import  get_feedbackNode,AgentState,get_classificationNode,is_ai_speaking,Novalite_model
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel,Field
 
@@ -16,19 +21,16 @@ from Agents.SpecificAgent.AgentSupervisor import SupervisorAgentNode
 from Agents.SpecificAgent.AgentTicket import TicketAgentNode
 from Agents.SpecificAgent.AgentRAG import RagAgentNode
 
-from utils.Routers import rag_router, feedback_router
-
-load_dotenv()
+# from utils.Routers import rag_router, feedback_router
 
 memory = MemorySaver()
-Novalite_model=ChatBedrockConverse(
-    model="amazon.nova-lite-v1:0", 
-    temperature=0, 
-    region_name='us-east-1',
-    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-       
-    )
+# Novalite_model=ChatBedrockConverse(
+#     model="amazon.nova-lite-v1:0", 
+#     temperature=0, 
+#     region_name='us-east-1',
+#     aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+#     aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+# )
 
 from typing import Literal
 from pydantic import BaseModel, Field
@@ -123,7 +125,7 @@ app = workFlow.compile(checkpointer=memory)
 
 def main():
     config = {"configurable": {"thread_id": "session_v1"}}
-    print("--- 🤖 L1 IT Support Supervisor Active ---")
+    print("--- L1 IT Support Supervisor Active ---")
     
     while True:
         user_input = input("\nUser: ")
@@ -133,8 +135,12 @@ def main():
         for event in app.stream({"messages": [("user", user_input)]}, config):
             # event is a dict: {'node_name': { ... node output ... }}
             for node_name, value in event.items():
+            
                 
-                print(f"--- [Event] Node: {node_name} | Output: {value["messages"][-1]} ---")
+                print(f"--- [Event] Node: {node_name} | \n Output: \n {value} ---")
+            full_state = app.get_state(config)
+
+            pprint(full_state.values)    
                 
 
 if __name__ == "__main__":
